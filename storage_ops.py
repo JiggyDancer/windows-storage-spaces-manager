@@ -2,7 +2,7 @@ import backend
 
 def get_physical_disks():
     cmd = (
-        "Get-PhysicalDisk | Select-Object Number, FriendlyName, SerialNumber, "
+        "Get-PhysicalDisk | Select-Object Number, FriendlyName, SerialNumber, UniqueId, "
         "MediaType, HealthStatus, OperationalStatus, Usage, CanPool, "
         "@{Name='SizeGB';Expression={[math]::Round($_.Size / 1GB, 2)}}"
     )
@@ -46,21 +46,22 @@ def get_pool_topology():
         
     return topology
 
-def create_pool(pool_name, disk_names):
-    if not disk_names:
+def create_pool(pool_name, disk_objs):
+    if not disk_objs:
         raise ValueError("No disks selected.")
-    disks_str = ", ".join([f"'{d}'" for d in disk_names])
-    cmd = (f"$disks = Get-PhysicalDisk | Where-Object FriendlyName -in {disks_str}; "
+    unique_ids = ", ".join([f"'{d.get('UniqueId')}'" for d in disk_objs])
+    cmd = (f"$disks = Get-PhysicalDisk | Where-Object UniqueId -in {unique_ids}; "
            f"New-StoragePool -FriendlyName '{pool_name}' "
-           f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks")
-    return backend.run_ps(cmd)
+           f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks "
+           f"-Confirm:$false")
+    return backend.run_ps(cmd, timeout=180)
 
 def optimize_pool(pool_name):
     cmd = f"Optimize-StoragePool -FriendlyName '{pool_name}' -AsJob"
-    return backend.run_ps(cmd)
+    return backend.run_ps(cmd, timeout=120)
 
-def set_media_type(disk_name, media_type):
-    cmd = f"Set-PhysicalDisk -FriendlyName '{disk_name}' -MediaType {media_type}"
+def set_media_type(disk_uid, media_type):
+    cmd = f"Set-PhysicalDisk -UniqueId '{disk_uid}' -MediaType {media_type}"
     return backend.run_ps(cmd)
 
 def create_tier(pool_name, tier_name, media_type):
@@ -94,4 +95,4 @@ def create_virtual_disk(pool_name, vd_name, resiliency_label, columns, interleav
     else:
         cmd += f" -Size {size_gb}GB"
         
-    return backend.run_ps(cmd)
+    return backend.run_ps(cmd, timeout=120)

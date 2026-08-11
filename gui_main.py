@@ -4,6 +4,7 @@ import ctypes
 import subprocess
 import tkinter as tk
 from tkinter import messagebox, Menu
+import threading
 
 # Auto-install dependency if missing
 try:
@@ -75,7 +76,7 @@ class StorageApp(ctk.CTk):
         self.selected_pool_var.trace_add("write", self.validate_state)
         
         self.disk_checkboxes = []
-        self.selected_context_disk = None
+        self.selected_context_disk_obj = None  # Store full disk object for context menu
         
         self.setup_left_pane()
         self.setup_middle_pane()
@@ -262,21 +263,55 @@ class StorageApp(ctk.CTk):
         self.log_box.tag_config("out_color", foreground="#B0BEC5")  # Light Gray/Blue
         self.log_box.tag_config("err_color", foreground="#E57373")  # Red
 
-    def show_disk_context_menu(self, event, disk_name):
-        self.selected_context_disk = disk_name
+        # Add Clear Log button
+        clear_btn = ctk.CTkButton(log_frame, text="Clear Log", command=self.clear_log, width=80)
+        clear_btn.pack(anchor="e", padx=10, pady=(0, 10))
+
+    def clear_log(self):
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+
+    def show_disk_context_menu(self, event, disk_obj):
+        self.selected_context_disk_obj = disk_obj
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
     def change_media_type(self, media_type):
-        if not self.selected_context_disk: 
+        if not self.selected_context_disk_obj: 
             return
+        disk_name = self.selected_context_disk_obj.get("FriendlyName", "Unknown")
+        disk_uid = self.selected_context_disk_obj.get("UniqueId", "")
         try:
-            storage_ops.set_media_type(self.selected_context_disk, media_type)
-            messagebox.showinfo("Success", f"Media Type for {self.selected_context_disk} forced to {media_type}.")
+            storage_ops.set_media_type(disk_uid, media_type)
+            messagebox.showinfo("Success", f"Media Type for {disk_name} forced to {media_type}.")
             self.refresh_data()
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    def validate_int_field(self, entry, min_val=1, allow_empty=False, allow_auto=False, field_name=""):
+        val = entry.get().strip()
+        if not val:
+            if allow_empty:
+                return None
+            elif allow_auto and val.lower() == "auto":
+                return "auto"
+            else:
+                raise ValueError(f"{field_name} cannot be empty.")
+        if allow_auto and val.lower() == "auto":
+            return "auto"
+        try:
+            num = int(val)
+            if num < min_val:
+                raise ValueError(f"{field_name} must be at least {min_val}.")
+            return num
+        except ValueError:
+            raise ValueError(f"{field_name} must be a positive integer or 'Auto'.")
+
     def refresh_data(self):
+        # Save selected disk UIDs before destroying widgets
+        selected_uids = {cb.disk_uid for cb in self.disk_checkboxes if cb.get() == 1}
+        
+        # Destroy existing widgets
         for widget in self.disk_container.winfo_children():
             widget.destroy()
         self.disk_checkboxes.clear()
@@ -297,7 +332,9 @@ class StorageApp(ctk.CTk):
                 can_pool = disk.get("CanPool", False)
 
                 cb = ctk.CTkCheckBox(row_frame, text="", width=self.table_layout[0][1], command=self.validate_state)
+                cb.disk_obj = disk  # Store full disk object
                 cb.disk_name = name
+                cb.disk_uid = disk.get("UniqueId", "")  # Store UniqueId for safety
                 if not can_pool:
                     cb.configure(state="disabled")
                 cb.pack(side="left", padx=5)
@@ -318,9 +355,10 @@ class StorageApp(ctk.CTk):
                     lbl = ctk.CTkLabel(row_frame, text=data_mapping[index - 1], width=width, anchor=anchor)
                     lbl.pack(side="left", padx=5, fill="x" if expand else "none", expand=expand)
 
-                row_frame.bind("<Button-3>", lambda e, d_name=name: self.show_disk_context_menu(e, d_name))
+                # Bind context menu to entire row
+                row_frame.bind("<Button-3>", lambda e, d_obj=disk: self.show_disk_context_menu(e, d_obj))
                 for child in row_frame.winfo_children():
-                    child.bind("<Button-3>", lambda e, d_name=name: self.show_disk_context_menu(e, d_name))
+                    child.bind("<Button-3>", lambda e, d_obj=disk: self.show_disk_context_menu(e, d_obj))
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load physical disks: {e}")
@@ -369,10 +407,15 @@ class StorageApp(ctk.CTk):
         except Exception as e:
             pass
             
+        # Restore selection state
+        for cb in self.disk_checkboxes:
+            if cb.disk_uid in selected_uids:
+                cb.select()
+
         self.validate_state()
 
     def validate_state(self, *args):
-        checked_disks = [cb.disk_name for cb in self.disk_checkboxes if cb.get() == 1]
+        checked_disks = [cb.disk_obj for cb in self.disk_checkboxes if cb.get() == 1]
         if len(checked_disks) > 0 and len(self.pool_name_var.get().strip()) > 0:
             self.btn_create_pool.configure(state="normal")
         else:
@@ -392,10 +435,44 @@ class StorageApp(ctk.CTk):
         else:
             self.btn_create_vd.configure(state="disabled")
 
+    def run_async(self, func, *args, **kwargs):
+        """Run a function in a background thread with UI feedback."""
+        def worker():
+            try:
+                func(*args, **kwargs)
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Error", str(e)))
+            finally:
+                self.after(0, lambda: self.btn_optimize.configure(state="normal"))
+                self.after(0, lambda: self.btn_create_pool.configure(state="normal"))
+                self.after(0, lambda: self.btn_create_vd.configure(state="normal"))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        # Disable buttons during operation
+        if func.__name__ == "optimize_pool":
+            self.btn_optimize.configure(state="disabled")
+        elif func.__name__ == "create_pool":
+            self.btn_create_pool.configure(state="disabled")
+        elif func.__name__ == "create_virtual_disk":
+            self.btn_create_vd.configure(state="disabled")
+        messagebox.showinfo("Started", "Operation running in background...")
+
     def create_pool(self):
         pool_name = self.pool_name_var.get().strip()
-        selected_disks = [cb.disk_name for cb in self.disk_checkboxes if cb.get() == 1]
+        selected_disks = [cb.disk_obj for cb in self.disk_checkboxes if cb.get() == 1]
+        
+        if not selected_disks:
+            messagebox.showwarning("No Disks Selected", "Please select at least one disk.")
+            return
+            
+        if not messagebox.askyesno("Confirm Pool Creation", 
+                                   f"Are you sure you want to create pool '{pool_name}' with {len(selected_disks)} disks?\n"
+                                   "This will erase all existing data on these disks if they were previously used."):
+            return
+
         try:
+            # Pass disk objects (which contain UniqueId) to backend
             storage_ops.create_pool(pool_name, selected_disks)
             messagebox.showinfo("Success", f"Pool '{pool_name}' created.")
             self.pool_name_var.set("")
@@ -405,11 +482,10 @@ class StorageApp(ctk.CTk):
 
     def optimize_target_pool(self):
         pool = self.selected_pool_var.get()
-        try:
-            storage_ops.optimize_pool(pool)
-            messagebox.showinfo("Optimization Started", f"Background optimization job initiated for pool '{pool}'.")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+        if not pool or pool == "No Pools Found":
+            messagebox.showwarning("No Pool Selected", "Please select a pool first.")
+            return
+        self.run_async(storage_ops.optimize_pool, pool)
 
     def create_tier(self, tier_label, media_type):
         pool = self.selected_pool_var.get()
@@ -425,9 +501,14 @@ class StorageApp(ctk.CTk):
         pool = self.selected_pool_var.get()
         vd_name = self.vd_name_var.get().strip()
         res = self.vd_resiliency.get()
-        cols = self.vd_columns.get()
-        intl = self.vd_interleave.get()
-        sz = self.vd_size.get()
+        
+        try:
+            cols = self.validate_int_field(self.vd_columns, allow_auto=True, field_name="Number of Columns")
+            intl = self.validate_int_field(self.vd_interleave, allow_auto=True, field_name="Interleave Size KB")
+            sz = self.validate_int_field(self.vd_size, allow_empty=True, allow_auto=True, field_name="Size in GB")
+        except ValueError as e:
+            messagebox.showerror("Input Error", str(e))
+            return
 
         try:
             storage_ops.create_virtual_disk(pool, vd_name, res, cols, intl, sz)
