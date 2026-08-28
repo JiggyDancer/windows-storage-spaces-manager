@@ -39,15 +39,18 @@ class ToolTip:
 
     def enter(self, event=None):
         if not self.text: return
-        x, y, _, _ = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 25
+        # Fix flicker: check if window already exists
+        if self.tw:
+            return
+        x = self.widget.winfo_rootx() + 25
+        y = self.widget.winfo_rooty() + 25
         self.tw = tk.Toplevel(self.widget)
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(self.tw, text=self.text, justify='left',
                          background="#2b2b2b", foreground="white",
-                         relief='solid', borderwidth=1, font=("Arial", 10), padx=8, pady=5)
+                         relief='solid', borderwidth=1,
+                         font=("Arial", 10), padx=8, pady=5)
         label.pack()
 
     def leave(self, event=None):
@@ -60,7 +63,7 @@ class StorageApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Windows Storage Spaces Manager")
-        self.geometry("1600x950")
+        self.geometry("1700x950")  # Slightly wider for tree view
 
         self.grid_columnconfigure(0, weight=5)
         self.grid_columnconfigure(1, weight=3)
@@ -116,8 +119,9 @@ class StorageApp(ctk.CTk):
         header_frame = ctk.CTkFrame(left_frame, fg_color="#343638", corner_radius=0)
         header_frame.pack(padx=10, pady=(5, 0), fill="x")
 
+        # FIX: Defined widths to ensure alignment with rows
         self.table_layout = [
-            ("", 30, "center", False),
+            ("", 30, "center", False),  # Checkbox width
             ("Num", 40, "center", False),
             ("Name", 200, "w", True),
             ("Media", 80, "center", False),
@@ -172,7 +176,6 @@ class StorageApp(ctk.CTk):
         self.btn_optimize = ctk.CTkButton(btn_frame, text="Optimize Pool", command=self.optimize_target_pool,
                                           state="disabled", width=100)
         self.btn_optimize.pack(side="left", expand=True, fill="x", padx=(0, 5))
-
         ToolTip(self.btn_optimize, "Rebalances data slabs across physical disks.")
 
         tier_frame = ctk.CTkFrame(middle_frame)
@@ -231,6 +234,16 @@ class StorageApp(ctk.CTk):
                                                        "Dual Parity"])
         self.vd_resiliency.pack(fill="x", padx=5, pady=(0, 5))
 
+        # FIX: Restored "Number of Columns" field
+        ctk.CTkLabel(new_frame, text="Number of Columns (Blank = Auto):").pack(anchor="w", padx=5, pady=(10, 0))
+        self.vd_columns = ctk.CTkEntry(new_frame, placeholder_text="Auto")
+        self.vd_columns.pack(fill="x", padx=5, pady=(0, 5))
+        ToolTip(self.vd_columns, "Strips data across this many disks. Auto usually equals the number of disks.")
+
+        ctk.CTkLabel(new_frame, text="Interleave Size KB (Blank = Auto):").pack(anchor="w", padx=5, pady=(10, 0))
+        self.vd_interleave = ctk.CTkEntry(new_frame, placeholder_text="Auto (256KB default)")
+        self.vd_interleave.pack(fill="x", padx=5, pady=(0, 5))
+
         ctk.CTkLabel(new_frame, text="Size in GB (Blank = Max):").pack(anchor="w", padx=5, pady=(10, 0))
         self.vd_size = ctk.CTkEntry(new_frame, placeholder_text="Maximum")
         self.vd_size.pack(fill="x", padx=5, pady=(0, 20))
@@ -275,6 +288,7 @@ class StorageApp(ctk.CTk):
             try:
                 disks = storage_ops.get_physical_disks()
                 pools = storage_ops.get_storage_pools()
+                # Fetch full details for topology
                 topology = storage_ops.get_pool_topology()
                 self.after(0, lambda: self._update_ui(disks, pools, topology))
             except Exception as e:
@@ -299,33 +313,72 @@ class StorageApp(ctk.CTk):
             name = disk.get("FriendlyName", "Unknown")
             can_pool = disk.get("CanPool", False)
 
-            cb = ctk.CTkCheckBox(row_frame, text="", width=30, command=self.validate_state)
+            # Use strict widths from table_layout to fix alignment
+            cb = ctk.CTkCheckBox(row_frame, text="", width=self.table_layout[0][1], command=self.validate_state)
             cb.disk_obj = disk
             cb.disk_uid = disk.get("UniqueId", "")
             if not can_pool: cb.configure(state="disabled")
             cb.pack(side="left")
             self.disk_checkboxes.append(cb)
 
-            ctk.CTkLabel(row_frame, text=str(disk.get("Number", "?")), width=40, anchor="center").pack(side="left")
-            ctk.CTkLabel(row_frame, text=name, width=200, anchor="w").pack(side="left")
-            ctk.CTkLabel(row_frame, text=disk.get("MediaType", "Unk"), width=80, anchor="center").pack(side="left")
-            ctk.CTkLabel(row_frame, text=f"{disk.get('SizeGB', 0):.2f}", width=80, anchor="e").pack(side="left")
-            ctk.CTkLabel(row_frame, text=disk.get("Usage", "Unk"), width=90, anchor="w").pack(side="left")
+            # Mapping data to layout widths
+            ctk.CTkLabel(row_frame, text=str(disk.get("Number", "?")), width=self.table_layout[1][1],
+                         anchor="center").pack(side="left")
+            ctk.CTkLabel(row_frame, text=name, width=self.table_layout[2][1], anchor="w").pack(side="left")
+            ctk.CTkLabel(row_frame, text=disk.get("MediaType", "Unk"), width=self.table_layout[3][1],
+                         anchor="center").pack(side="left")
+            ctk.CTkLabel(row_frame, text=f"{disk.get('SizeGB', 0):.2f}", width=self.table_layout[4][1],
+                         anchor="e").pack(side="left")
+            ctk.CTkLabel(row_frame, text=disk.get("Usage", "Unk"), width=self.table_layout[5][1], anchor="w").pack(
+                side="left")
+            ctk.CTkLabel(row_frame, text=disk.get("OperationalStatus", "Unk"), width=self.table_layout[6][1],
+                         anchor="w").pack(side="left")
+            ctk.CTkLabel(row_frame, text=str(can_pool), width=self.table_layout[7][1], anchor="center").pack(
+                side="left")
 
             row_frame.bind("<Button-3>", lambda e, d=disk: self.show_disk_context_menu(e, d))
             for child in row_frame.winfo_children(): child.bind("<Button-3>",
                                                                 lambda e, d=disk: self.show_disk_context_menu(e, d))
 
-        # Refresh Middle Pane (Topology)
+        # Refresh Middle Pane (Topology Tree)
         for widget in self.topo_container.winfo_children(): widget.destroy()
+
+        if not topology:
+            ctk.CTkLabel(self.topo_container, text="No Storage Pools Found.", text_color="gray").pack(anchor="w",
+                                                                                                      padx=10)
+
         for pool_name, data in topology.items():
-            ctk.CTkLabel(self.topo_container, text=f"Pool: {pool_name}", font=("Arial", 12, "bold")).pack(anchor="w",
-                                                                                                          padx=5,
-                                                                                                          pady=(5, 0))
+            # Pool Root
+            pool_lbl = ctk.CTkLabel(self.topo_container, text=f"🖴 Pool: {pool_name}", font=("Arial", 14, "bold"),
+                                    text_color="#3a7ebf")
+            pool_lbl.pack(anchor="w", pady=(10, 0), padx=5)
+
+            # Physical Disks Branch
             if data["disks"]:
+                ctk.CTkLabel(self.topo_container, text="  ├── Physical Disks:", font=("Arial", 11, "bold")).pack(
+                    anchor="w", padx=15)
                 for d in data["disks"]:
-                    ctk.CTkLabel(self.topo_container, text=f"  • {d.get('FriendlyName')} ({d.get('SizeGB')}GB)").pack(
-                        anchor="w", padx=10)
+                    d_info = f"  │   • {d.get('FriendlyName')} ({d.get('SizeGB')}GB, {d.get('MediaType')})"
+                    ctk.CTkLabel(self.topo_container, text=d_info).pack(anchor="w", padx=20)
+
+            # Tiers Branch
+            if data["tiers"]:
+                ctk.CTkLabel(self.topo_container, text="  ├── Tiers:", font=("Arial", 11, "bold")).pack(anchor="w",
+                                                                                                        padx=15)
+                for t in data["tiers"]:
+                    t_info = f"  │   • {t.get('FriendlyName')} [{t.get('MediaType')}]"
+                    ctk.CTkLabel(self.topo_container, text=t_info).pack(anchor="w", padx=20)
+
+            # Virtual Disks Branch
+            if data.get("vdisks"):
+                ctk.CTkLabel(self.topo_container, text="  └── Virtual Disks:", font=("Arial", 11, "bold")).pack(
+                    anchor="w", padx=15)
+                for vd in data["vdisks"]:
+                    vd_info = f"      • {vd.get('FriendlyName')} ({vd.get('ResiliencySettingName')}, {vd.get('SizeGB')}GB)"
+                    ctk.CTkLabel(self.topo_container, text=vd_info).pack(anchor="w", padx=20)
+            else:
+                ctk.CTkLabel(self.topo_container, text="  └── Virtual Disks: None", text_color="gray").pack(anchor="w",
+                                                                                                            padx=15)
 
         # Refresh Dropdowns
         self.pool_list = [p.get("FriendlyName") for p in pools if p.get("FriendlyName")]
@@ -343,7 +396,6 @@ class StorageApp(ctk.CTk):
         self.validate_state()
 
     def on_pool_change(self, *args):
-        # Update Virtual Disk Dropdown when pool changes
         pool = self.selected_pool_var.get()
         if pool and pool != "No Pools Found":
             try:
@@ -373,32 +425,27 @@ class StorageApp(ctk.CTk):
         has_valid_pool = current_pool != "" and current_pool != "No Pools Found"
         vd_name = self.vd_name_var.get().strip()
 
-        # Create Pool Button
         if len(selected_disks) > 0 and len(pool_name) > 0:
             self.btn_create_pool.configure(state="normal")
         else:
             self.btn_create_pool.configure(state="disabled")
 
-        # Add Disk Button (requires valid pool and selected disks that are not in pool - simplified check)
         if has_valid_pool and len(selected_disks) > 0:
             self.btn_add_disk.configure(state="normal")
         else:
             self.btn_add_disk.configure(state="disabled")
 
-        # Tiers & Optimize
         tier_state = "normal" if has_valid_pool else "disabled"
         self.btn_tier_hdd.configure(state=tier_state)
         self.btn_tier_ssd.configure(state=tier_state)
         self.btn_tier_nvme.configure(state=tier_state)
         self.btn_optimize.configure(state=tier_state)
 
-        # Create VD
         if has_valid_pool and len(vd_name) > 0:
             self.btn_create_vd.configure(state="normal")
         else:
             self.btn_create_vd.configure(state="disabled")
 
-        # Resize VD
         current_vd = self.selected_vd_var.get()
         if has_valid_pool and current_vd and current_vd not in ["No VDisks", "Select Pool First", "Error"]:
             self.btn_resize_vd.configure(state="normal")
@@ -445,12 +492,15 @@ class StorageApp(ctk.CTk):
         pool = self.selected_pool_var.get()
         vd_name = self.vd_name_var.get()
         res = self.vd_resiliency.get()
+        # FIX: Grab column and interleave values
+        cols = self.vd_columns.get().strip()
+        intl = self.vd_interleave.get().strip()
         size = self.vd_size.get().strip()
         try:
-            storage_ops.create_virtual_disk(pool, vd_name, res, "auto", "auto", size)
+            storage_ops.create_virtual_disk(pool, vd_name, res, cols, intl, size)
             messagebox.showinfo("Success", "Virtual Disk Created.")
             self.vd_name_var.set("")
-            self.on_pool_change()  # Refresh VD list
+            self.on_pool_change()
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
@@ -461,7 +511,6 @@ class StorageApp(ctk.CTk):
         try:
             storage_ops.resize_virtual_disk(pool, vd_name, "maximum")
             messagebox.showinfo("Success", "Virtual Disk expanded.")
-            # Note: User still needs to extend volume in Disk Management
             self.on_pool_change()
         except Exception as e:
             messagebox.showerror("Error", str(e))
