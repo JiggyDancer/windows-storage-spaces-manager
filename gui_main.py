@@ -45,7 +45,10 @@ class ToolTip:
 
     def enter(self, event=None):
         if not self.text: return
-        if self.tw: return
+
+        # FIX: Prevent flickering by checking if window already exists
+        if self.tw:
+            return
 
         x = self.widget.winfo_rootx() + 25
         y = self.widget.winfo_rooty() + 25
