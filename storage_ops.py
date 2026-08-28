@@ -26,9 +26,9 @@ def get_storage_pools():
 
 def get_virtual_disks(pool_name):
     safe_pool = backend.sanitize_ps_string(pool_name)
-    # Use piping to avoid parameter binding errors on older PS versions
+    # FIX: Added NumberOfColumns to the select list
     cmd = (f"Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk | "
-           f"Select-Object FriendlyName, ResiliencySettingName, OperationalStatus, "
+           f"Select-Object FriendlyName, ResiliencySettingName, NumberOfColumns, OperationalStatus, "
            f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
     result = backend.run_ps(cmd)
     if not result:
@@ -45,7 +45,6 @@ def get_pool_topology():
         if not pool_name:
             continue
 
-        # FIX: Use piping for compatibility
         tier_cmd = (f"Get-StoragePool -FriendlyName '{pool_name}' | Get-StorageTier | "
                     f"Select-Object FriendlyName, MediaType, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
@@ -58,7 +57,6 @@ def get_pool_topology():
         disks = backend.run_ps(disk_cmd)
         disks = [disks] if isinstance(disks, dict) else (disks or [])
 
-        # Add VDisks to topology
         vdisks = get_virtual_disks(pool_name)
 
         topology[pool_name] = {"tiers": tiers, "disks": disks, "vdisks": vdisks}
@@ -71,7 +69,6 @@ def create_pool(pool_name, disk_objs):
         raise ValueError("No disks selected.")
     unique_ids = ", ".join([f"'{d.get('UniqueId')}'" for d in disk_objs])
 
-    # FIX: Removed -Confirm:$false
     cmd = (f"$disks = Get-PhysicalDisk | Where-Object UniqueId -in {unique_ids}; "
            f"New-StoragePool -FriendlyName '{pool_name}' "
            f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks")
@@ -128,7 +125,6 @@ def create_virtual_disk(pool_name, vd_name, resiliency_label, columns, interleav
     if redundancy is not None:
         cmd += f" -PhysicalDiskRedundancy {redundancy}"
 
-    # FIX: Logic to handle Column and Interleave inputs correctly
     if columns and columns.lower() != "auto":
         cmd += f" -NumberOfColumns {columns}"
     if interleave_kb and interleave_kb.lower() != "auto":
@@ -154,3 +150,13 @@ def resize_virtual_disk(pool_name, vd_name, size_gb):
                f"Resize-VirtualDisk -InputObject $vd -Size {size_gb}GB")
 
     return backend.run_ps(cmd, timeout=120)
+
+
+# FIX: New function to modify columns
+def set_virtual_disk_columns(pool_name, vd_name, columns):
+    safe_pool = backend.sanitize_ps_string(pool_name)
+    safe_vd = backend.sanitize_ps_string(vd_name)
+
+    cmd = (f"$vd = Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk -FriendlyName '{safe_vd}'; "
+           f"Set-ResiliencySetting -InputObject $vd -NumberOfColumns {columns}")
+    return backend.run_ps(cmd, timeout=60)
