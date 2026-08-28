@@ -6,21 +6,21 @@ import tkinter as tk
 from tkinter import messagebox, Menu
 import threading
 
-# When using 'uv', dependencies must be installed via 'uv add' or 'uv sync'.
-# We remove the runtime pip installer to prevent conflicts with uv's managed environment.
+# Auto-install dependency if missing
 try:
     import customtkinter as ctk
 except ImportError:
-    # If running via uv, the user likely forgot to sync dependencies.
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror(
-        "Dependency Missing",
-        "The 'customtkinter' package is not found.\n\n"
-        "If using uv, please run:\n    uv add customtkinter\n"
-        "Then try running the application again."
-    )
-    sys.exit(1)
+    temp_root = tk.Tk()
+    temp_root.withdraw()
+    messagebox.showinfo("Initial Setup", "Missing dependency 'customtkinter'. Installing now, please wait...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "customtkinter"])
+        import customtkinter as ctk
+    except Exception as e:
+        messagebox.showerror("Installation Error", f"Failed to automatically install customtkinter.\n\n{e}")
+        sys.exit(1)
+    finally:
+        temp_root.destroy()
 
 import backend
 import storage_ops
@@ -38,21 +38,16 @@ class ToolTip:
         self.widget.bind("<Leave>", self.leave)
 
     def enter(self, event=None):
-        if not self.text:
-            return
-
-        # If the tooltip already exists, don't create it again
+        if not self.text: return
+        # FIX: Prevent flickering by checking if window already exists
         if self.tw:
             return
-
         x, y, cx, cy = self.widget.bbox("insert")
         x += self.widget.winfo_rootx() + 25
         y += self.widget.winfo_rooty() + 25
-
         self.tw = tk.Toplevel(self.widget)
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry(f"+{x}+{y}")
-
         label = tk.Label(self.tw, text=self.text, justify='left',
                          background="#2b2b2b", foreground="white",
                          relief='solid', borderwidth=1,
@@ -271,12 +266,17 @@ class StorageApp(ctk.CTk):
 
     def validate_int_field(self, entry, min_val=1, allow_empty=False, allow_auto=False, field_name=""):
         val = entry.get().strip()
+
+        # FIX: Handle empty values immediately for 'Auto' logic to prevent "cannot be empty" error
         if not val:
-            if allow_empty:
+            if allow_auto:
+                return "auto"
+            elif allow_empty:
                 return None
             else:
                 raise ValueError(f"{field_name} cannot be empty.")
 
+        # Handle string "Auto" if user types it
         if allow_auto and val.lower() == "auto":
             return "auto"
 
@@ -289,108 +289,109 @@ class StorageApp(ctk.CTk):
             raise ValueError(f"{field_name} must be a positive integer or 'Auto'.")
 
     def refresh_data(self):
-        def fetch_thread():
-            try:
-                disks = storage_ops.get_physical_disks()
-                pools = storage_ops.get_storage_pools()
-                topology = storage_ops.get_pool_topology()
-                self.after(0, lambda: self._update_ui(disks, pools, topology))
-            except Exception as e:
-                self.after(0, lambda: messagebox.showerror("Refresh Error", str(e)))
-
-        t = threading.Thread(target=fetch_thread, daemon=True)
-        t.start()
-
-    def _update_ui(self, disks, pools, topology):
         selected_uids = {cb.disk_uid for cb in self.disk_checkboxes if cb.get() == 1}
 
         for widget in self.disk_container.winfo_children():
             widget.destroy()
         self.disk_checkboxes.clear()
 
+        try:
+            disks = storage_ops.get_physical_disks()
+            try:
+                disks.sort(key=lambda x: int(x.get("Number")) if str(x.get("Number")).isdigit() else 999)
+            except:
+                pass
+
+            for i, disk in enumerate(disks):
+                bg_color = "#2b2b2b" if i % 2 == 0 else "transparent"
+                row_frame = ctk.CTkFrame(self.disk_container, fg_color=bg_color, corner_radius=0)
+                row_frame.pack(fill="x", pady=1)
+
+                name = disk.get("FriendlyName", "Unknown")
+                can_pool = disk.get("CanPool", False)
+
+                cb = ctk.CTkCheckBox(row_frame, text="", width=self.table_layout[0][1], command=self.validate_state)
+                cb.disk_obj = disk
+                cb.disk_name = name
+                cb.disk_uid = disk.get("UniqueId", "")
+                if not can_pool:
+                    cb.configure(state="disabled")
+                cb.pack(side="left", padx=5)
+                self.disk_checkboxes.append(cb)
+
+                data_mapping = [
+                    str(disk.get("Number", "?")),
+                    name,
+                    disk.get("MediaType", "Unknown"),
+                    f"{disk.get('SizeGB', 0):.2f}",
+                    disk.get("Usage", "Unknown"),
+                    disk.get("OperationalStatus", "Unknown"),
+                    str(can_pool)
+                ]
+
+                for index in range(1, len(self.table_layout)):
+                    _, width, anchor, expand = self.table_layout[index]
+                    lbl = ctk.CTkLabel(row_frame, text=data_mapping[index - 1], width=width, anchor=anchor)
+                    lbl.pack(side="left", padx=5, fill="x" if expand else "none", expand=expand)
+
+                row_frame.bind("<Button-3>", lambda e, d_obj=disk: self.show_disk_context_menu(e, d_obj))
+                for child in row_frame.winfo_children():
+                    child.bind("<Button-3>", lambda e, d_obj=disk: self.show_disk_context_menu(e, d_obj))
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load physical disks: {e}")
+
         for widget in self.topo_container.winfo_children():
             widget.destroy()
 
         try:
-            disks.sort(key=lambda x: int(x.get("Number")) if str(x.get("Number")).isdigit() else 999)
-        except:
+            topology = storage_ops.get_pool_topology()
+            if not topology:
+                ctk.CTkLabel(self.topo_container, text="No Storage Pools Found.", text_color="gray").pack(anchor="w",
+                                                                                                          padx=10,
+                                                                                                          pady=10)
+
+            for pool_name, data in topology.items():
+                pool_lbl = ctk.CTkLabel(self.topo_container, text=f"🖴 Pool: {pool_name}", font=("Arial", 14, "bold"),
+                                        text_color="#3a7ebf")
+                pool_lbl.pack(anchor="w", pady=(10, 0), padx=5)
+
+                if data["tiers"]:
+                    ctk.CTkLabel(self.topo_container, text="  ↳ Tiers:", font=("Arial", 12, "bold")).pack(anchor="w",
+                                                                                                          padx=15)
+                    for tier in data["tiers"]:
+                        t_name = tier.get("FriendlyName", "Unknown")
+                        t_media = tier.get("MediaType", "Unknown")
+                        t_size = tier.get("SizeGB", 0)
+                        ctk.CTkLabel(self.topo_container, text=f"      • {t_name} [{t_media}] ({t_size} GB)").pack(
+                            anchor="w", padx=20)
+
+                if data["disks"]:
+                    ctk.CTkLabel(self.topo_container, text="  ↳ Assigned Physical Disks:",
+                                 font=("Arial", 12, "bold")).pack(anchor="w", padx=15)
+                    for disk in data["disks"]:
+                        d_name = disk.get("FriendlyName", "Unknown")
+                        d_media = disk.get("MediaType", "Unknown")
+                        d_usage = disk.get("Usage", "Unknown")
+                        d_size = disk.get("SizeGB", 0)
+                        ctk.CTkLabel(self.topo_container,
+                                     text=f"      • {d_name} | {d_media} | {d_size} GB | {d_usage}").pack(anchor="w",
+                                                                                                          padx=20)
+        except Exception as e:
             pass
 
-        for i, disk in enumerate(disks):
-            bg_color = "#2b2b2b" if i % 2 == 0 else "transparent"
-            row_frame = ctk.CTkFrame(self.disk_container, fg_color=bg_color, corner_radius=0)
-            row_frame.pack(fill="x", pady=1)
-
-            name = disk.get("FriendlyName", "Unknown")
-            can_pool = disk.get("CanPool", False)
-
-            cb = ctk.CTkCheckBox(row_frame, text="", width=self.table_layout[0][1], command=self.validate_state)
-            cb.disk_obj = disk
-            cb.disk_name = name
-            cb.disk_uid = disk.get("UniqueId", "")
-            if not can_pool:
-                cb.configure(state="disabled")
-            cb.pack(side="left", padx=5)
-            self.disk_checkboxes.append(cb)
-
-            data_mapping = [
-                str(disk.get("Number", "?")),
-                name,
-                disk.get("MediaType", "Unknown"),
-                f"{disk.get('SizeGB', 0):.2f}",
-                disk.get("Usage", "Unknown"),
-                disk.get("OperationalStatus", "Unknown"),
-                str(can_pool)
-            ]
-
-            for index in range(1, len(self.table_layout)):
-                _, width, anchor, expand = self.table_layout[index]
-                lbl = ctk.CTkLabel(row_frame, text=data_mapping[index - 1], width=width, anchor=anchor)
-                lbl.pack(side="left", padx=5, fill="x" if expand else "none", expand=expand)
-
-            row_frame.bind("<Button-3>", lambda e, d_obj=disk: self.show_disk_context_menu(e, d_obj))
-            for child in row_frame.winfo_children():
-                child.bind("<Button-3>", lambda e, d_obj=disk: self.show_disk_context_menu(e, d_obj))
-
-        if not topology:
-            ctk.CTkLabel(self.topo_container, text="No Storage Pools Found.", text_color="gray").pack(anchor="w",
-                                                                                                      padx=10, pady=10)
-
-        for pool_name, data in topology.items():
-            pool_lbl = ctk.CTkLabel(self.topo_container, text=f"🖴 Pool: {pool_name}", font=("Arial", 14, "bold"),
-                                    text_color="#3a7ebf")
-            pool_lbl.pack(anchor="w", pady=(10, 0), padx=5)
-
-            if data["tiers"]:
-                ctk.CTkLabel(self.topo_container, text="  ↳ Tiers:", font=("Arial", 12, "bold")).pack(anchor="w",
-                                                                                                      padx=15)
-                for tier in data["tiers"]:
-                    t_name = tier.get("FriendlyName", "Unknown")
-                    t_media = tier.get("MediaType", "Unknown")
-                    t_size = tier.get("SizeGB", 0)
-                    ctk.CTkLabel(self.topo_container, text=f"      • {t_name} [{t_media}] ({t_size} GB)").pack(
-                        anchor="w", padx=20)
-
-            if data["disks"]:
-                ctk.CTkLabel(self.topo_container, text="  ↳ Assigned Physical Disks:", font=("Arial", 12, "bold")).pack(
-                    anchor="w", padx=15)
-                for disk in data["disks"]:
-                    d_name = disk.get("FriendlyName", "Unknown")
-                    d_media = disk.get("MediaType", "Unknown")
-                    d_usage = disk.get("Usage", "Unknown")
-                    d_size = disk.get("SizeGB", 0)
-                    ctk.CTkLabel(self.topo_container,
-                                 text=f"      • {d_name} | {d_media} | {d_size} GB | {d_usage}").pack(anchor="w",
-                                                                                                      padx=20)
-
-        self.pool_list = [p.get("FriendlyName") for p in pools if p.get("FriendlyName")]
-        if self.pool_list:
-            self.pool_dropdown.configure(values=self.pool_list)
-            if self.selected_pool_var.get() not in self.pool_list:
-                self.selected_pool_var.set(self.pool_list[0])
-        else:
-            self.pool_dropdown.configure(values=["No Pools Found"])
-            self.selected_pool_var.set("No Pools Found")
+        try:
+            pools = storage_ops.get_storage_pools()
+            self.pool_list = [p.get("FriendlyName") for p in pools if p.get("FriendlyName")]
+            if self.pool_list:
+                self.pool_dropdown.configure(values=self.pool_list)
+                if self.selected_pool_var.get() not in self.pool_list:
+                    self.selected_pool_var.set(self.pool_list[0])
+            else:
+                self.pool_dropdown.configure(values=["No Pools Found"])
+                self.selected_pool_var.set("No Pools Found")
+        except Exception as e:
+            pass
 
         for cb in self.disk_checkboxes:
             if cb.disk_uid in selected_uids:
@@ -443,10 +444,6 @@ class StorageApp(ctk.CTk):
 
     def create_pool(self):
         pool_name = self.pool_name_var.get().strip()
-        if len(pool_name) < 1:
-            messagebox.showwarning("Input Error", "Please enter a pool name.")
-            return
-
         selected_disks = [cb.disk_obj for cb in self.disk_checkboxes if cb.get() == 1]
 
         if not selected_disks:
@@ -455,7 +452,7 @@ class StorageApp(ctk.CTk):
 
         if not messagebox.askyesno("Confirm Pool Creation",
                                    f"Are you sure you want to create pool '{pool_name}' with {len(selected_disks)} disks?\n"
-                                   "This will erase all existing data on these disks."):
+                                   "This will erase all existing data on these disks if they were previously used."):
             return
 
         try:
@@ -518,11 +515,10 @@ if __name__ == "__main__":
     else:
         params = " ".join([f'"{arg}"' for arg in sys.argv])
         working_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        exe = sys.executable
 
-        # uv run can sometimes execute via a shim; trying to replace python.exe with pythonw.exe
-        # might break the path resolution. It is safer to just use sys.executable as is for elevation.
-        # However, if the user explicitly installed pythonw, we can try the old logic.
-        # We will keep it simple for uv compatibility:
+        exe = sys.executable
+        if exe.lower().endswith("python.exe"):
+            exe = exe[:-10] + "pythonw.exe"
+
         ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, working_dir, 1)
         sys.exit()

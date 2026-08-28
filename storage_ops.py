@@ -33,13 +33,14 @@ def get_pool_topology():
         if not pool_name:
             continue
 
-        # Updated to pipe the pool object directly and exclude PS properties for cleaner JSON
+        # FIX: Use piping instead of -StoragePoolFriendlyName
         tier_cmd = (f"Get-StoragePool -FriendlyName '{pool_name}' | Get-StorageTier | "
                     f"Select-Object FriendlyName, MediaType, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
         tiers = backend.run_ps(tier_cmd)
         tiers = [tiers] if isinstance(tiers, dict) else (tiers or [])
 
+        # FIX: Use piping instead of -StoragePoolFriendlyName
         disk_cmd = (f"Get-StoragePool -FriendlyName '{pool_name}' | Get-PhysicalDisk | "
                     f"Select-Object FriendlyName, MediaType, Usage, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
@@ -54,11 +55,9 @@ def get_pool_topology():
 def create_pool(pool_name, disk_objs):
     if not disk_objs:
         raise ValueError("No disks selected.")
-
-    safe_pool_name = backend.sanitize_ps_string(pool_name)
-    # UIDs are generally safe, but we ensure they are enclosed properly
     unique_ids = ", ".join([f"'{d.get('UniqueId')}'" for d in disk_objs])
 
+    # FIX: Removed -Confirm:$false to prevent ParameterBindingException
     cmd = (f"$disks = Get-PhysicalDisk | Where-Object UniqueId -in {unique_ids}; "
            f"New-StoragePool -FriendlyName '{pool_name}' "
            f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks")
@@ -66,30 +65,22 @@ def create_pool(pool_name, disk_objs):
 
 
 def optimize_pool(pool_name):
-    safe_pool = backend.sanitize_ps_string(pool_name)
-    cmd = f"Optimize-StoragePool -FriendlyName '{safe_pool}' -AsJob"
+    cmd = f"Optimize-StoragePool -FriendlyName '{pool_name}' -AsJob"
     return backend.run_ps(cmd, timeout=120)
 
 
 def set_media_type(disk_uid, media_type):
-    # disk_uid comes from system, but safe to sanitize anyway
-    safe_uid = backend.sanitize_ps_string(disk_uid)
-    cmd = f"Set-PhysicalDisk -UniqueId '{safe_uid}' -MediaType {media_type}"
+    cmd = f"Set-PhysicalDisk -UniqueId '{disk_uid}' -MediaType {media_type}"
     return backend.run_ps(cmd)
 
 
 def create_tier(pool_name, tier_name, media_type):
-    safe_pool = backend.sanitize_ps_string(pool_name)
-    safe_tier = backend.sanitize_ps_string(tier_name)
-    cmd = (f"New-StorageTier -StoragePoolFriendlyName '{safe_pool}' "
-           f"-FriendlyName '{safe_tier}' -MediaType {media_type}")
+    cmd = (f"New-StorageTier -StoragePoolFriendlyName '{pool_name}' "
+           f"-FriendlyName '{tier_name}' -MediaType {media_type}")
     return backend.run_ps(cmd)
 
 
 def create_virtual_disk(pool_name, vd_name, resiliency_label, columns, interleave_kb, size_gb):
-    safe_pool = backend.sanitize_ps_string(pool_name)
-    safe_vd_name = backend.sanitize_ps_string(vd_name)
-
     res_map = {
         "Simple": ("Simple", None),
         "Two-Way Mirror": ("Mirror", 1),
@@ -99,8 +90,8 @@ def create_virtual_disk(pool_name, vd_name, resiliency_label, columns, interleav
     }
     res_type, redundancy = res_map.get(resiliency_label, ("Simple", None))
 
-    cmd = (f"New-VirtualDisk -StoragePoolFriendlyName '{safe_pool}' "
-           f"-FriendlyName '{safe_vd_name}' -ResiliencySettingName {res_type}")
+    cmd = (f"New-VirtualDisk -StoragePoolFriendlyName '{pool_name}' "
+           f"-FriendlyName '{vd_name}' -ResiliencySettingName {res_type}")
 
     if redundancy is not None:
         cmd += f" -PhysicalDiskRedundancy {redundancy}"
