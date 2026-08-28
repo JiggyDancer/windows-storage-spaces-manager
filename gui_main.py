@@ -9,17 +9,11 @@ import threading
 try:
     import customtkinter as ctk
 except ImportError:
-    temp_root = tk.Tk()
-    temp_root.withdraw()
-    messagebox.showinfo("Initial Setup", "Missing dependency 'customtkinter'. Installing now...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "customtkinter"])
-        import customtkinter as ctk
-    except Exception as e:
-        messagebox.showerror("Installation Error", f"Failed to automatically install customtkinter.\n\n{e}")
-        sys.exit(1)
-    finally:
-        temp_root.destroy()
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror("Error",
+                         "customtkinter not found. Please install via 'uv add customtkinter' or 'pip install customtkinter'.")
+    sys.exit(1)
 
 import backend
 import storage_ops
@@ -38,7 +32,7 @@ class ToolTip:
 
     def enter(self, event=None):
         if not self.text: return
-        if self.tw: return  # Prevent flicker
+        if self.tw: return
 
         x = self.widget.winfo_rootx() + 25
         y = self.widget.winfo_rooty() + 25
@@ -47,8 +41,7 @@ class ToolTip:
         self.tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(self.tw, text=self.text, justify='left',
                          background="#2b2b2b", foreground="white",
-                         relief='solid', borderwidth=1,
-                         font=("Arial", 10), padx=8, pady=5)
+                         relief='solid', borderwidth=1, font=("Arial", 10), padx=8, pady=5)
         label.pack()
 
     def leave(self, event=None):
@@ -78,7 +71,6 @@ class StorageApp(ctk.CTk):
         self.selected_pool_var.trace_add("write", self.on_pool_change)
         self.selected_vd_var = ctk.StringVar(value="")
         self.selected_vd_var.trace_add("write", self.validate_state)
-        self.new_columns_var = ctk.StringVar()
 
         self.disk_checkboxes = []
         self.selected_context_disk_obj = None
@@ -116,17 +108,10 @@ class StorageApp(ctk.CTk):
         header_frame = ctk.CTkFrame(left_frame, fg_color="#343638", corner_radius=0)
         header_frame.pack(padx=5, pady=(5, 0), fill="x")
 
-        # FIX: Strict widths with fixed font to ensure alignment
         self.table_font = ("Consolas", 11)
         self.table_layout = [
-            ("", 30),  # Checkbox
-            ("Num", 40),
-            ("Name", 180),
-            ("Media", 70),
-            ("Size (GB)", 80),
-            ("Usage", 80),
-            ("Status", 70),
-            ("Can Pool", 60)
+            ("", 30), ("Num", 40), ("Name", 180), ("Media", 70),
+            ("Size (GB)", 80), ("Usage", 80), ("Status", 70), ("Can Pool", 60)
         ]
 
         for text, width in self.table_layout:
@@ -142,7 +127,6 @@ class StorageApp(ctk.CTk):
         self.context_menu.add_command(label="Force MediaType: SSD", command=lambda: self.change_media_type("SSD"))
         self.context_menu.add_command(label="Force MediaType: HDD", command=lambda: self.change_media_type("HDD"))
 
-        # Pool Controls
         pool_ctrl_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
         pool_ctrl_frame.pack(padx=10, pady=(5, 10), fill="x")
 
@@ -206,12 +190,11 @@ class StorageApp(ctk.CTk):
                                              values=["No Pools Selected"])
         self.vd_dropdown.pack(fill="x", pady=(0, 5))
 
-        # Resize
         self.btn_resize_vd = ctk.CTkButton(existing_frame, text="Expand Disk to Max", command=self.resize_existing_vd,
                                            state="disabled")
         self.btn_resize_vd.pack(fill="x", pady=(5, 0))
 
-        # FIX: Change Columns Section
+        # Change Columns Section
         mod_frame = ctk.CTkFrame(existing_frame, fg_color="transparent")
         mod_frame.pack(fill="x", pady=5)
 
@@ -221,8 +204,6 @@ class StorageApp(ctk.CTk):
         self.btn_set_col = ctk.CTkButton(mod_frame, text="Set Columns", command=self.set_columns, state="disabled",
                                          width=80)
         self.btn_set_col.pack(side="left")
-        ToolTip(self.btn_set_col,
-                "WARNING: Changing columns repairs/resyncs the volume. Data remains but operation is intensive.")
 
         # Separator
         ctk.CTkLabel(right_frame, text="―――――――――――――――――――", text_color="gray").pack(pady=10)
@@ -272,4 +253,284 @@ class StorageApp(ctk.CTk):
 
         self.log_box.tag_config("cmd_color", foreground="#4DB6AC")
         self.log_box.tag_config("out_color", foreground="#B0BEC5")
-        self.log_box.tag_config
+        self.log_box.tag_config("err_color", foreground="#E57373")
+
+        clear_btn = ctk.CTkButton(log_frame, text="Clear Log", command=lambda: self.log_box.delete("1.0", "end"),
+                                  width=80)
+        clear_btn.pack(anchor="e", padx=10, pady=(0, 10))
+
+    def change_media_type(self, media_type):
+        if not self.selected_context_disk_obj: return
+        disk_name = self.selected_context_disk_obj.get("FriendlyName", "Unknown")
+        disk_uid = self.selected_context_disk_obj.get("UniqueId", "")
+        try:
+            storage_ops.set_media_type(disk_uid, media_type)
+            messagebox.showinfo("Success", f"Media Type for {disk_name} forced to {media_type}.")
+            self.refresh_data()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def refresh_data(self):
+        def fetch():
+            try:
+                disks = storage_ops.get_physical_disks()
+                pools = storage_ops.get_storage_pools()
+                topology = storage_ops.get_pool_topology()
+                self.after(0, lambda: self._update_ui(disks, pools, topology))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Refresh Error", str(e)))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _update_ui(self, disks, pools, topology):
+        selected_uids = {cb.disk_uid for cb in self.disk_checkboxes if cb.get() == 1}
+        current_pool = self.selected_pool_var.get()
+
+        # Refresh Left Pane
+        for widget in self.disk_container.winfo_children(): widget.destroy()
+        self.disk_checkboxes.clear()
+
+        for i, disk in enumerate(disks):
+            bg_color = "#2b2b2b" if i % 2 == 0 else "transparent"
+            row_frame = ctk.CTkFrame(self.disk_container, fg_color=bg_color, corner_radius=0)
+            row_frame.pack(fill="x", pady=1)
+
+            name = disk.get("FriendlyName", "Unknown")
+            can_pool = disk.get("CanPool", False)
+
+            cb = ctk.CTkCheckBox(row_frame, text="", width=self.table_layout[0][1], command=self.validate_state)
+            cb.disk_obj = disk
+            cb.disk_uid = disk.get("UniqueId", "")
+            if not can_pool: cb.configure(state="disabled")
+            cb.pack(side="left")
+            self.disk_checkboxes.append(cb)
+
+            data = [
+                str(disk.get("Number", "?")),
+                name[:20],
+                disk.get("MediaType", "Unk")[:4],
+                f"{disk.get('SizeGB', 0):.2f}",
+                disk.get("Usage", "Unk")[:8],
+                disk.get("OperationalStatus", "Unk")[:8],
+                str(can_pool)
+            ]
+
+            for idx, val in enumerate(data):
+                w = self.table_layout[idx + 1][1]
+                anchor = "e" if idx == 3 else "w"
+                lbl = ctk.CTkLabel(row_frame, text=val, width=w, anchor=anchor, font=self.table_font)
+                lbl.pack(side="left", padx=2)
+
+            row_frame.bind("<Button-3>", lambda e, d=disk: self.show_disk_context_menu(e, d))
+            for child in row_frame.winfo_children(): child.bind("<Button-3>",
+                                                                lambda e, d=disk: self.show_disk_context_menu(e, d))
+
+        # Refresh Middle Pane (Topology)
+        for widget in self.topo_container.winfo_children(): widget.destroy()
+        if not topology:
+            ctk.CTkLabel(self.topo_container, text="No Storage Pools Found.", text_color="gray").pack(anchor="w",
+                                                                                                      padx=10)
+
+        for pool_name, data in topology.items():
+            pool_lbl = ctk.CTkLabel(self.topo_container, text=f"<tool_call> Pool: {pool_name}",
+                                    font=("Arial", 14, "bold"), text_color="#3a7ebf")
+            pool_lbl.pack(anchor="w", pady=(10, 0), padx=5)
+
+            if data["disks"]:
+                ctk.CTkLabel(self.topo_container, text="  ├── Physical Disks:", font=("Arial", 11, "bold")).pack(
+                    anchor="w", padx=15)
+                for d in data["disks"]:
+                    d_info = f"  │   • {d.get('FriendlyName')} ({d.get('SizeGB')}GB, {d.get('MediaType')})"
+                    ctk.CTkLabel(self.topo_container, text=d_info).pack(anchor="w", padx=20)
+
+            if data.get("vdisks"):
+                ctk.CTkLabel(self.topo_container, text="  └── Virtual Disks:", font=("Arial", 11, "bold")).pack(
+                    anchor="w", padx=15)
+                for vd in data["vdisks"]:
+                    vd_info = (f"      ◦ {vd.get('FriendlyName')} | {vd.get('ResiliencySettingName')} | "
+                               f"Cols: {vd.get('NumberOfColumns')} | {vd.get('SizeGB')}GB")
+                    ctk.CTkLabel(self.topo_container, text=vd_info).pack(anchor="w", padx=20)
+
+        # Refresh Dropdowns
+        self.pool_list = [p.get("FriendlyName") for p in pools if p.get("FriendlyName")]
+        if self.pool_list:
+            self.pool_dropdown.configure(values=self.pool_list)
+            if current_pool not in self.pool_list: self.selected_pool_var.set(self.pool_list[0])
+        else:
+            self.pool_dropdown.configure(values=["No Pools Found"])
+            self.selected_pool_var.set("No Pools Found")
+
+        for cb in self.disk_checkboxes:
+            if cb.disk_uid in selected_uids: cb.select()
+
+        self.validate_state()
+
+    def on_pool_change(self, *args):
+        pool = self.selected_pool_var.get()
+        if pool and pool != "No Pools Found":
+            try:
+                vdisks = storage_ops.get_virtual_disks(pool)
+                vd_names = [vd.get("FriendlyName") for vd in vdisks if vd.get("FriendlyName")]
+                if vd_names:
+                    self.vd_dropdown.configure(values=vd_names)
+                    self.selected_vd_var.set(vd_names[0])
+                else:
+                    self.vd_dropdown.configure(values=["No VDisks"])
+                    self.selected_vd_var.set("No VDisks")
+            except:
+                self.vd_dropdown.configure(values=["Error"])
+        else:
+            self.vd_dropdown.configure(values=["Select Pool First"])
+            self.selected_vd_var.set("Select Pool First")
+        self.validate_state()
+
+    def show_disk_context_menu(self, event, disk_obj):
+        self.selected_context_disk_obj = disk_obj
+        self.context_menu.tk_popup(event.x_root, event.y_root)
+
+    def validate_state(self, *args):
+        selected_disks = [cb.disk_obj for cb in self.disk_checkboxes if cb.get() == 1]
+        pool_name = self.pool_name_var.get().strip()
+        current_pool = self.selected_pool_var.get()
+        has_valid_pool = current_pool != "" and current_pool != "No Pools Found"
+        vd_name = self.vd_name_var.get().strip()
+
+        # Create Pool
+        if len(selected_disks) > 0 and len(pool_name) > 0:
+            self.btn_create_pool.configure(state="normal")
+        else:
+            self.btn_create_pool.configure(state="disabled")
+
+        # Add Disk
+        if has_valid_pool and len(selected_disks) > 0:
+            self.btn_add_disk.configure(state="normal")
+        else:
+            self.btn_add_disk.configure(state="disabled")
+
+        # Tiers & Optimize
+        tier_state = "normal" if has_valid_pool else "disabled"
+        self.btn_tier_hdd.configure(state=tier_state)
+        self.btn_tier_ssd.configure(state=tier_state)
+        self.btn_tier_nvme.configure(state=tier_state)
+        self.btn_optimize.configure(state=tier_state)
+
+        # Create VD
+        if has_valid_pool and len(vd_name) > 0:
+            self.btn_create_vd.configure(state="normal")
+        else:
+            self.btn_create_vd.configure(state="disabled")
+
+        # Existing VD Ops
+        current_vd = self.selected_vd_var.get()
+        can_modify_vd = has_valid_pool and current_vd and current_vd not in ["No VDisks", "Select Pool First", "Error"]
+
+        if can_modify_vd:
+            self.btn_resize_vd.configure(state="normal")
+        else:
+            self.btn_resize_vd.configure(state="disabled")
+
+        # FIX: Enable button based on selection, not input content. Check input inside the command.
+        if can_modify_vd:
+            self.btn_set_col.configure(state="normal")
+        else:
+            self.btn_set_col.configure(state="disabled")
+
+    def create_pool(self):
+        if not messagebox.askyesno("Confirm", "Create new pool?"): return
+        try:
+            storage_ops.create_pool(self.pool_name_var.get(),
+                                    [cb.disk_obj for cb in self.disk_checkboxes if cb.get() == 1])
+            messagebox.showinfo("Success", "Pool Created.")
+            self.pool_name_var.set("")
+            self.refresh_data()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def add_disks_to_pool(self):
+        pool = self.selected_pool_var.get()
+        disks = [cb.disk_obj for cb in self.disk_checkboxes if cb.get() == 1]
+        if not messagebox.askyesno("Confirm", f"Add {len(disks)} disks to '{pool}'?"): return
+        try:
+            storage_ops.add_disks_to_pool(pool, disks)
+            messagebox.showinfo("Success", "Disks added.")
+            self.refresh_data()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def optimize_target_pool(self):
+        pool = self.selected_pool_var.get()
+        threading.Thread(target=lambda: storage_ops.optimize_pool(pool)).start()
+        messagebox.showinfo("Started", "Optimization started.")
+
+    def create_tier(self, label, media_type):
+        pool = self.selected_pool_var.get()
+        try:
+            storage_ops.create_tier(pool, f"{pool}_{label}", media_type)
+            messagebox.showinfo("Success", "Tier created.")
+            self.refresh_data()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def create_vd(self):
+        pool = self.selected_pool_var.get()
+        vd_name = self.vd_name_var.get()
+        res = self.vd_resiliency.get()
+        cols = self.vd_columns.get().strip()
+        intl = self.vd_interleave.get().strip()
+        size = self.vd_size.get().strip()
+        try:
+            storage_ops.create_virtual_disk(pool, vd_name, res, cols, intl, size)
+            messagebox.showinfo("Success", "Virtual Disk Created.")
+            self.vd_name_var.set("")
+            self.on_pool_change()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def resize_existing_vd(self):
+        pool = self.selected_pool_var.get()
+        vd_name = self.selected_vd_var.get()
+        if not messagebox.askyesno("Confirm", f"Expand '{vd_name}' to maximum?"): return
+        try:
+            storage_ops.resize_virtual_disk(pool, vd_name, "maximum")
+            messagebox.showinfo("Success", "Disk expanded.")
+            self.on_pool_change()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def set_columns(self):
+        pool = self.selected_pool_var.get()
+        vd_name = self.selected_vd_var.get()
+        cols = self.vd_col_entry.get().strip()
+
+        if not cols.isdigit():
+            messagebox.showerror("Error", "Column count must be an integer.")
+            return
+
+        if not messagebox.askyesname("Warning", "Changing columns triggers a repair operation. Continue?"): return
+
+        try:
+            storage_ops.set_virtual_disk_columns(pool, vd_name, cols)
+            messagebox.showinfo("Success", f"Columns for '{vd_name}' set to {cols}.")
+            self.vd_col_entry.delete(0, 'end')
+            self.refresh_data()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+
+if __name__ == "__main__":
+    if is_admin():
+        app = StorageApp()
+        app.mainloop()
+    else:
+        params = " ".join([f'"{arg}"' for arg in sys.argv])
+        exe = sys.executable
+        if exe.lower().endswith("python.exe"): exe = exe[:-10] + "pythonw.exe"
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, os.path.dirname(os.path.abspath(sys.argv[0])),
+                                            1)

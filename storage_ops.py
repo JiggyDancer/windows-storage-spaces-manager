@@ -26,7 +26,6 @@ def get_storage_pools():
 
 def get_virtual_disks(pool_name):
     safe_pool = backend.sanitize_ps_string(pool_name)
-    # FIX: Added NumberOfColumns to the select list
     cmd = (f"Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk | "
            f"Select-Object FriendlyName, ResiliencySettingName, NumberOfColumns, OperationalStatus, "
            f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
@@ -152,11 +151,12 @@ def resize_virtual_disk(pool_name, vd_name, size_gb):
     return backend.run_ps(cmd, timeout=120)
 
 
-# FIX: New function to modify columns
 def set_virtual_disk_columns(pool_name, vd_name, columns):
     safe_pool = backend.sanitize_ps_string(pool_name)
     safe_vd = backend.sanitize_ps_string(vd_name)
 
-    cmd = (f"$vd = Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk -FriendlyName '{safe_vd}'; "
-           f"Set-ResiliencySetting -InputObject $vd -NumberOfColumns {columns}")
+    # FIX: Use Where-Object to safely pipe the specific disk object to Set-ResiliencySetting
+    cmd = (
+        f"$vd = Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk | Where-Object {{$_.FriendlyName -eq '{safe_vd}'}}; "
+        f"Set-ResiliencySetting -InputObject $vd -NumberOfColumns {columns}")
     return backend.run_ps(cmd, timeout=60)
