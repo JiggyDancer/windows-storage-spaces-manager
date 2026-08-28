@@ -61,9 +61,8 @@ def create_pool(pool_name, disk_objs):
     unique_ids = ", ".join([f"'{d.get('UniqueId')}'" for d in disk_objs])
 
     cmd = (f"$disks = Get-PhysicalDisk | Where-Object UniqueId -in {unique_ids}; "
-           f"New-StoragePool -FriendlyName '{safe_pool_name}' "
-           f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks "
-           f"-Confirm:$false")
+           f"New-StoragePool -FriendlyName '{pool_name}' "
+           f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks")
     return backend.run_ps(cmd, timeout=180)
 
 
