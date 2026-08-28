@@ -6,20 +6,29 @@ import tkinter as tk
 from tkinter import messagebox, Menu
 import threading
 
+# Safe dependency check compatible with 'uv' environments
 try:
     import customtkinter as ctk
 except ImportError:
-    temp_root = tk.Tk()
-    temp_root.withdraw()
-    messagebox.showinfo("Initial Setup", "Missing dependency 'customtkinter'. Installing now...")
+    # Create a temporary root to show messagebox if tk is available
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "customtkinter"])
-        import customtkinter as ctk
-    except Exception as e:
-        messagebox.showerror("Installation Error", f"Failed to automatically install customtkinter.\n\n{e}")
-        sys.exit(1)
-    finally:
+        temp_root = tk.Tk()
+        temp_root.withdraw()
+        has_tk = True
+    except:
+        has_tk = False
+
+    msg = ("The 'customtkinter' package is missing.\n\n"
+           "If using 'uv', run:\n    uv add customtkinter\n\n"
+           "If using pip, run:\n    pip install customtkinter")
+
+    if has_tk:
+        messagebox.showerror("Dependency Missing", msg)
         temp_root.destroy()
+    else:
+        print(f"ERROR: {msg}")
+
+    sys.exit(1)
 
 import backend
 import storage_ops
