@@ -101,7 +101,8 @@ def create_virtual_disk(pool_name, vd_name, resiliency_label, columns, interleav
     if str(interleave_kb).lower() != "auto" and str(interleave_kb).strip() != "":
         cmd += f" -Interleave {interleave_kb}KB"
 
-    if str(size_gb).lower() == "maximum" or str(size_gb).strip() == "":
+    # FIX: Check for 'auto' in addition to 'maximum' and empty string
+    if str(size_gb).lower() in ["maximum", "auto", ""]:
         cmd += " -UseMaximumSize"
     else:
         cmd += f" -Size {size_gb}GB"
