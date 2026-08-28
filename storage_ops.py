@@ -40,7 +40,7 @@ def get_pool_topology():
         tiers = backend.run_ps(tier_cmd)
         tiers = [tiers] if isinstance(tiers, dict) else (tiers or [])
 
-        disk_cmd = (f"Get-PhysicalDisk -StoragePoolFriendlyName '{pool_name}' | "
+        disk_cmd = (f"Get-StoragePool -FriendlyName '{pool_name}' | Get-PhysicalDisk | "
                     f"Select-Object FriendlyName, MediaType, Usage, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
         disks = backend.run_ps(disk_cmd)
