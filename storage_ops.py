@@ -151,12 +151,12 @@ def resize_virtual_disk(pool_name, vd_name, size_gb):
     return backend.run_ps(cmd, timeout=120)
 
 
-def set_virtual_disk_columns(pool_name, vd_name, columns):
+# NEW: Delete function
+def remove_virtual_disk(pool_name, vd_name):
     safe_pool = backend.sanitize_ps_string(pool_name)
     safe_vd = backend.sanitize_ps_string(vd_name)
 
-    # FIX: Use Where-Object to safely pipe the specific disk object to Set-ResiliencySetting
     cmd = (
         f"$vd = Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk | Where-Object {{$_.FriendlyName -eq '{safe_vd}'}}; "
-        f"Set-ResiliencySetting -InputObject $vd -NumberOfColumns {columns}")
+        f"Remove-VirtualDisk -InputObject $vd -Confirm:$false")
     return backend.run_ps(cmd, timeout=60)

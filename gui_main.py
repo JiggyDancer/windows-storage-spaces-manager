@@ -10,7 +10,6 @@ import threading
 try:
     import customtkinter as ctk
 except ImportError:
-    # Create a temporary root to show messagebox if tk is available
     try:
         temp_root = tk.Tk()
         temp_root.withdraw()
@@ -47,7 +46,7 @@ class ToolTip:
 
     def enter(self, event=None):
         if not self.text: return
-        if self.tw: return  # Prevent flicker
+        if self.tw: return
 
         x = self.widget.winfo_rootx() + 25
         y = self.widget.winfo_rooty() + 25
@@ -56,8 +55,7 @@ class ToolTip:
         self.tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(self.tw, text=self.text, justify='left',
                          background="#2b2b2b", foreground="white",
-                         relief='solid', borderwidth=1,
-                         font=("Arial", 10), padx=8, pady=5)
+                         relief='solid', borderwidth=1, font=("Arial", 10), padx=8, pady=5)
         label.pack()
 
     def leave(self, event=None):
@@ -87,7 +85,6 @@ class StorageApp(ctk.CTk):
         self.selected_pool_var.trace_add("write", self.on_pool_change)
         self.selected_vd_var = ctk.StringVar(value="")
         self.selected_vd_var.trace_add("write", self.validate_state)
-        self.new_columns_var = ctk.StringVar()
 
         self.disk_checkboxes = []
         self.selected_context_disk_obj = None
@@ -125,17 +122,10 @@ class StorageApp(ctk.CTk):
         header_frame = ctk.CTkFrame(left_frame, fg_color="#343638", corner_radius=0)
         header_frame.pack(padx=5, pady=(5, 0), fill="x")
 
-        # FIX: Strict widths with fixed font to ensure alignment
         self.table_font = ("Consolas", 11)
         self.table_layout = [
-            ("", 30),  # Checkbox
-            ("Num", 40),
-            ("Name", 180),
-            ("Media", 70),
-            ("Size (GB)", 80),
-            ("Usage", 80),
-            ("Status", 70),
-            ("Can Pool", 60)
+            ("", 30), ("Num", 40), ("Name", 180), ("Media", 70),
+            ("Size (GB)", 80), ("Usage", 80), ("Status", 70), ("Can Pool", 60)
         ]
 
         for text, width in self.table_layout:
@@ -151,7 +141,6 @@ class StorageApp(ctk.CTk):
         self.context_menu.add_command(label="Force MediaType: SSD", command=lambda: self.change_media_type("SSD"))
         self.context_menu.add_command(label="Force MediaType: HDD", command=lambda: self.change_media_type("HDD"))
 
-        # Pool Controls
         pool_ctrl_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
         pool_ctrl_frame.pack(padx=10, pady=(5, 10), fill="x")
 
@@ -215,23 +204,15 @@ class StorageApp(ctk.CTk):
                                              values=["No Pools Selected"])
         self.vd_dropdown.pack(fill="x", pady=(0, 5))
 
-        # Resize
         self.btn_resize_vd = ctk.CTkButton(existing_frame, text="Expand Disk to Max", command=self.resize_existing_vd,
                                            state="disabled")
         self.btn_resize_vd.pack(fill="x", pady=(5, 0))
 
-        # FIX: Change Columns Section
-        mod_frame = ctk.CTkFrame(existing_frame, fg_color="transparent")
-        mod_frame.pack(fill="x", pady=5)
-
-        self.vd_col_entry = ctk.CTkEntry(mod_frame, placeholder_text="New Column Count", width=150)
-        self.vd_col_entry.pack(side="left", padx=(0, 5), fill="x", expand=True)
-
-        self.btn_set_col = ctk.CTkButton(mod_frame, text="Set Columns", command=self.set_columns, state="disabled",
-                                         width=80)
-        self.btn_set_col.pack(side="left")
-        ToolTip(self.btn_set_col,
-                "WARNING: Changing columns repairs/resyncs the volume. Data remains but operation is intensive.")
+        # MODIFIED: Replace Columns input with Delete button
+        self.btn_delete_vd = ctk.CTkButton(existing_frame, text="Delete Virtual Disk", command=self.delete_vd,
+                                           state="disabled", fg_color="#d32f2f", hover_color="#b71c1c")
+        self.btn_delete_vd.pack(fill="x", pady=(5, 0))
+        ToolTip(self.btn_delete_vd, "Permanently deletes the selected virtual disk. ALL DATA WILL BE LOST.")
 
         # Separator
         ctk.CTkLabel(right_frame, text="―――――――――――――――――――", text_color="gray").pack(pady=10)
@@ -314,7 +295,7 @@ class StorageApp(ctk.CTk):
         selected_uids = {cb.disk_uid for cb in self.disk_checkboxes if cb.get() == 1}
         current_pool = self.selected_pool_var.get()
 
-        # Refresh Left Pane (Disks)
+        # Refresh Left Pane
         for widget in self.disk_container.winfo_children(): widget.destroy()
         self.disk_checkboxes.clear()
 
@@ -333,10 +314,9 @@ class StorageApp(ctk.CTk):
             cb.pack(side="left")
             self.disk_checkboxes.append(cb)
 
-            # FIX: Strict packing with fixed font
             data = [
                 str(disk.get("Number", "?")),
-                name[:20],  # Truncate long names to preserve width
+                name[:20],
                 disk.get("MediaType", "Unk")[:4],
                 f"{disk.get('SizeGB', 0):.2f}",
                 disk.get("Usage", "Unk")[:8],
@@ -346,12 +326,7 @@ class StorageApp(ctk.CTk):
 
             for idx, val in enumerate(data):
                 w = self.table_layout[idx + 1][1]
-                anchor = "w"
-                if idx == 3:
-                    anchor = "e"  # Size align right
-                elif idx > 0:
-                    anchor = "center"
-
+                anchor = "e" if idx == 3 else "w"
                 lbl = ctk.CTkLabel(row_frame, text=val, width=w, anchor=anchor, font=self.table_font)
                 lbl.pack(side="left", padx=2)
 
@@ -359,19 +334,17 @@ class StorageApp(ctk.CTk):
             for child in row_frame.winfo_children(): child.bind("<Button-3>",
                                                                 lambda e, d=disk: self.show_disk_context_menu(e, d))
 
-        # Refresh Middle Pane (Topology Tree)
+        # Refresh Middle Pane (Topology)
         for widget in self.topo_container.winfo_children(): widget.destroy()
-
         if not topology:
             ctk.CTkLabel(self.topo_container, text="No Storage Pools Found.", text_color="gray").pack(anchor="w",
                                                                                                       padx=10)
 
         for pool_name, data in topology.items():
-            pool_lbl = ctk.CTkLabel(self.topo_container, text=f"🕧 Pool: {pool_name}", font=("Arial", 14, "bold"),
+            pool_lbl = ctk.CTkLabel(self.topo_container, text=f"🗀 Pool: {pool_name}", font=("Arial", 14, "bold"),
                                     text_color="#3a7ebf")
             pool_lbl.pack(anchor="w", pady=(10, 0), padx=5)
 
-            # Physical Disks
             if data["disks"]:
                 ctk.CTkLabel(self.topo_container, text="  ├── Physical Disks:", font=("Arial", 11, "bold")).pack(
                     anchor="w", padx=15)
@@ -379,15 +352,12 @@ class StorageApp(ctk.CTk):
                     d_info = f"  │   • {d.get('FriendlyName')} ({d.get('SizeGB')}GB, {d.get('MediaType')})"
                     ctk.CTkLabel(self.topo_container, text=d_info).pack(anchor="w", padx=20)
 
-            # Virtual Disks
             if data.get("vdisks"):
                 ctk.CTkLabel(self.topo_container, text="  └── Virtual Disks:", font=("Arial", 11, "bold")).pack(
                     anchor="w", padx=15)
                 for vd in data["vdisks"]:
-                    # FIX: Display number of columns
                     vd_info = (f"      ◦ {vd.get('FriendlyName')} | {vd.get('ResiliencySettingName')} | "
                                f"Cols: {vd.get('NumberOfColumns')} | {vd.get('SizeGB')}GB")
-
                     ctk.CTkLabel(self.topo_container, text=vd_info).pack(anchor="w", padx=20)
 
         # Refresh Dropdowns
@@ -463,10 +433,11 @@ class StorageApp(ctk.CTk):
         else:
             self.btn_resize_vd.configure(state="disabled")
 
-        if can_modify_vd and self.vd_col_entry.get():
-            self.btn_set_col.configure(state="normal")
+        # Update Delete button state
+        if can_modify_vd:
+            self.btn_delete_vd.configure(state="normal")
         else:
-            self.btn_set_col.configure(state="disabled")
+            self.btn_delete_vd.configure(state="disabled")
 
     def create_pool(self):
         if not messagebox.askyesno("Confirm", "Create new pool?"): return
@@ -530,20 +501,22 @@ class StorageApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
-    def set_columns(self):
+    # NEW: Delete Virtual Disk Logic
+    def delete_vd(self):
         pool = self.selected_pool_var.get()
         vd_name = self.selected_vd_var.get()
-        cols = self.vd_col_entry.get()
-        if not cols.isdigit():
-            messagebox.showerror("Error", "Column count must be an integer.")
+
+        warning_msg = (f"Are you sure you want to delete the virtual disk '{vd_name}'?\n\n"
+                       "** WARNING: ALL DATA ON THIS DISK WILL BE PERMANENTLY LOST. **\n\n"
+                       "This action cannot be undone.")
+
+        if not messagebox.askyesno("!!! DELETE WARNING !!!", warning_msg):
             return
 
-        if not messagebox.askyesno("Warning", "Changing columns triggers a repair operation. Continue?"): return
-
         try:
-            storage_ops.set_virtual_disk_columns(pool, vd_name, cols)
-            messagebox.showinfo("Success", f"Columns for '{vd_name}' set to {cols}.")
-            self.vd_col_entry.delete(0, 'end')
+            storage_ops.remove_virtual_disk(pool, vd_name)
+            messagebox.showinfo("Success", f"Virtual Disk '{vd_name}' deleted.")
+            self.on_pool_change()  # Refresh list
             self.refresh_data()
         except Exception as e:
             messagebox.showerror("Error", str(e))
