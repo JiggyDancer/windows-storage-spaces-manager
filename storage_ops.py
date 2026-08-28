@@ -24,6 +24,18 @@ def get_storage_pools():
         return []
 
 
+def get_virtual_disks(pool_name):
+    safe_pool = backend.sanitize_ps_string(pool_name)
+    # Use piping to avoid parameter binding errors on older PS versions
+    cmd = (f"Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk | "
+           f"Select-Object FriendlyName, ResiliencySettingName, OperationalStatus, "
+           f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
+    result = backend.run_ps(cmd)
+    if not result:
+        return []
+    return [result] if isinstance(result, dict) else result
+
+
 def get_pool_topology():
     pools = get_storage_pools()
     topology = {}
@@ -40,28 +52,18 @@ def get_pool_topology():
         tiers = backend.run_ps(tier_cmd)
         tiers = [tiers] if isinstance(tiers, dict) else (tiers or [])
 
-        # FIX: Use piping for compatibility
         disk_cmd = (f"Get-StoragePool -FriendlyName '{pool_name}' | Get-PhysicalDisk | "
                     f"Select-Object FriendlyName, MediaType, Usage, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
         disks = backend.run_ps(disk_cmd)
         disks = [disks] if isinstance(disks, dict) else (disks or [])
 
-        topology[pool_name] = {"tiers": tiers, "disks": disks}
+        # Add VDisks to topology
+        vdisks = get_virtual_disks(pool_name)
+
+        topology[pool_name] = {"tiers": tiers, "disks": disks, "vdisks": vdisks}
 
     return topology
-
-
-def get_virtual_disks(pool_name):
-    safe_pool = backend.sanitize_ps_string(pool_name)
-    # Use piping to avoid parameter binding errors on older PS versions
-    cmd = (f"Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk | "
-           f"Select-Object FriendlyName, ResiliencySettingName, OperationalStatus, "
-           f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
-    result = backend.run_ps(cmd)
-    if not result:
-        return []
-    return [result] if isinstance(result, dict) else result
 
 
 def create_pool(pool_name, disk_objs):
@@ -126,13 +128,13 @@ def create_virtual_disk(pool_name, vd_name, resiliency_label, columns, interleav
     if redundancy is not None:
         cmd += f" -PhysicalDiskRedundancy {redundancy}"
 
-    if str(columns).lower() != "auto" and str(columns).strip() != "":
+    # FIX: Logic to handle Column and Interleave inputs correctly
+    if columns and columns.lower() != "auto":
         cmd += f" -NumberOfColumns {columns}"
-    if str(interleave_kb).lower() != "auto" and str(interleave_kb).strip() != "":
+    if interleave_kb and interleave_kb.lower() != "auto":
         cmd += f" -Interleave {interleave_kb}KB"
 
-    # FIX: Handle 'auto' and 'maximum' correctly
-    if str(size_gb).lower() in ["maximum", "auto", ""]:
+    if not size_gb or size_gb.lower() in ["maximum", "auto", ""]:
         cmd += " -UseMaximumSize"
     else:
         cmd += f" -Size {size_gb}GB"
@@ -144,10 +146,9 @@ def resize_virtual_disk(pool_name, vd_name, size_gb):
     safe_pool = backend.sanitize_ps_string(pool_name)
     safe_vd = backend.sanitize_ps_string(vd_name)
 
-    if str(size_gb).lower() in ["maximum", "auto", ""]:
+    if not size_gb or size_gb.lower() in ["maximum", "auto", ""]:
         cmd = (f"$vd = Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk -FriendlyName '{safe_vd}'; "
-               f"$pdSize = (Get-StoragePool -FriendlyName '{safe_pool}').Size; "
-               f"Resize-VirtualDisk -InputObject $vd -Size $pdSize")
+               f"Resize-VirtualDisk -InputObject $vd -Size (Get-StoragePool -FriendlyName '{safe_pool}').Size")
     else:
         cmd = (f"$vd = Get-StoragePool -FriendlyName '{safe_pool}' | Get-VirtualDisk -FriendlyName '{safe_vd}'; "
                f"Resize-VirtualDisk -InputObject $vd -Size {size_gb}GB")
