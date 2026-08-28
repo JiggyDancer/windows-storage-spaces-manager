@@ -38,13 +38,21 @@ class ToolTip:
         self.widget.bind("<Leave>", self.leave)
 
     def enter(self, event=None):
-        if not self.text: return
+        if not self.text:
+            return
+
+        # If the tooltip already exists, don't create it again
+        if self.tw:
+            return
+
         x, y, cx, cy = self.widget.bbox("insert")
         x += self.widget.winfo_rootx() + 25
         y += self.widget.winfo_rooty() + 25
+
         self.tw = tk.Toplevel(self.widget)
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry(f"+{x}+{y}")
+
         label = tk.Label(self.tw, text=self.text, justify='left',
                          background="#2b2b2b", foreground="white",
                          relief='solid', borderwidth=1,

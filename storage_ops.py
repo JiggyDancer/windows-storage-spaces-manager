@@ -33,15 +33,14 @@ def get_pool_topology():
         if not pool_name:
             continue
 
-        safe_pool = backend.sanitize_ps_string(pool_name)
-
-        tier_cmd = (f"Get-StorageTier -StoragePoolFriendlyName '{safe_pool}' | "
+        # Updated to pipe the pool object directly and exclude PS properties for cleaner JSON
+        tier_cmd = (f"Get-StoragePool -FriendlyName '{pool_name}' | Get-StorageTier | "
                     f"Select-Object FriendlyName, MediaType, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
         tiers = backend.run_ps(tier_cmd)
         tiers = [tiers] if isinstance(tiers, dict) else (tiers or [])
 
-        disk_cmd = (f"Get-PhysicalDisk -StoragePoolFriendlyName '{safe_pool}' | "
+        disk_cmd = (f"Get-PhysicalDisk -StoragePoolFriendlyName '{pool_name}' | "
                     f"Select-Object FriendlyName, MediaType, Usage, "
                     f"@{{Name='SizeGB';Expression={{[math]::Round($_.Size / 1GB, 2)}}}}")
         disks = backend.run_ps(disk_cmd)
@@ -61,9 +60,8 @@ def create_pool(pool_name, disk_objs):
     unique_ids = ", ".join([f"'{d.get('UniqueId')}'" for d in disk_objs])
 
     cmd = (f"$disks = Get-PhysicalDisk | Where-Object UniqueId -in {unique_ids}; "
-           f"New-StoragePool -FriendlyName '{safe_pool_name}' "
-           f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks "
-           f"-Confirm:$false")
+           f"New-StoragePool -FriendlyName '{pool_name}' "
+           f"-StorageSubsystemFriendlyName 'Windows Storage*' -PhysicalDisks $disks")
     return backend.run_ps(cmd, timeout=180)
 
 
