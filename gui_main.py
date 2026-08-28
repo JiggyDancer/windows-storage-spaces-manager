@@ -6,7 +6,6 @@ import tkinter as tk
 from tkinter import messagebox, Menu
 import threading
 
-# Safe dependency check compatible with 'uv' environments
 try:
     import customtkinter as ctk
 except ImportError:
