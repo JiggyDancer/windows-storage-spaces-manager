@@ -4,6 +4,11 @@ import json
 log_callback = None
 LOG_LEVEL = "INFO"  # Can be set by GUI later: "DEBUG", "INFO", "WARN", "ERROR"
 
+def sanitize_ps_string(s):
+    """Escape single quotes to prevent breaking PowerShell strings."""
+    if not s: return ""
+    return str(s).replace("'", "''")
+
 def run_ps(command, timeout=30, log_level="INFO"):
     """
     Execute PowerShell command and return parsed JSON output.
